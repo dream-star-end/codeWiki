@@ -122,37 +122,85 @@
       </aside>
 
       <!-- Main Content -->
-      <main class="flex-1 overflow-y-auto">
-        <div class="max-w-4xl mx-auto px-8 py-8">
-          <!-- Page Title -->
-          <h1 class="text-2xl font-bold text-[var(--foreground)] mb-6 pb-4 border-b border-[var(--border-color)]">
-            {{ currentPage?.title || '加载中...' }}
-          </h1>
+      <main class="flex-1 flex flex-col overflow-hidden">
+        <!-- Tab 切换栏 -->
+        <div class="flex items-center gap-1 px-4 py-2 bg-[var(--card-bg)] border-b border-[var(--border-color)]">
+          <button
+            @click="activeTab = 'docs'"
+            :class="[
+              'px-4 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5',
+              activeTab === 'docs'
+                ? 'bg-[var(--accent-primary)] text-white'
+                : 'text-[var(--muted)] hover:bg-[var(--background)]'
+            ]"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            文档
+          </button>
+          <button
+            @click="activeTab = 'code'"
+            :class="[
+              'px-4 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5',
+              activeTab === 'code'
+                ? 'bg-[var(--accent-primary)] text-white'
+                : 'text-[var(--muted)] hover:bg-[var(--background)]'
+            ]"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+            </svg>
+            源码
+          </button>
+        </div>
 
-          <!-- Loading -->
-          <div v-if="loading.summary || loading.docs[currentPage?.moduleId || '']" class="py-12 text-center">
-            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-primary)]"></div>
-            <p class="mt-4 text-[var(--muted)]">加载文档中...</p>
-          </div>
+        <!-- 文档内容 -->
+        <div v-show="activeTab === 'docs'" class="flex-1 overflow-y-auto">
+          <div class="max-w-4xl mx-auto px-8 py-8">
+            <!-- Page Title -->
+            <h1 class="text-2xl font-bold text-[var(--foreground)] mb-6 pb-4 border-b border-[var(--border-color)]">
+              {{ currentPage?.title || '加载中...' }}
+            </h1>
 
-          <!-- Markdown Content -->
-          <article v-else ref="contentRef" class="prose-wiki" @click="handleDocLinkClick">
-            <div v-html="renderedContent"></div>
-          </article>
+            <!-- Loading -->
+            <div v-if="loading.summary || loading.docs[currentPage?.moduleId || '']" class="py-12 text-center">
+              <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-primary)]"></div>
+              <p class="mt-4 text-[var(--muted)]">加载文档中...</p>
+            </div>
 
-          <!-- Related Files -->
-          <div v-if="currentPage?.files?.length" class="mt-8 pt-6 border-t border-[var(--border-color)]">
-            <h3 class="text-sm font-semibold text-[var(--muted)] mb-3">相关文件</h3>
-            <div class="flex flex-wrap gap-2">
-              <span
-                v-for="file in currentPage.files.slice(0, 10)"
-                :key="file"
-                class="px-2 py-1 text-xs bg-[var(--background)] text-[var(--muted)] rounded border border-[var(--border-color)]"
-              >
-                {{ file }}
-              </span>
+            <!-- Markdown Content -->
+            <article v-else ref="contentRef" class="prose-wiki" @click="handleDocLinkClick">
+              <div v-html="renderedContent"></div>
+            </article>
+
+            <!-- Related Files -->
+            <div v-if="currentPage?.files?.length" class="mt-8 pt-6 border-t border-[var(--border-color)]">
+              <h3 class="text-sm font-semibold text-[var(--muted)] mb-3">相关文件 (点击查看源码)</h3>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  v-for="file in currentPage.files.slice(0, 10)"
+                  :key="file"
+                  @click="openCodeFile(file)"
+                  class="px-2 py-1 text-xs bg-[var(--background)] text-[var(--accent-primary)] rounded border border-[var(--border-color)] hover:bg-[var(--accent-primary)]/10 hover:border-[var(--accent-primary)]/30 transition-colors cursor-pointer"
+                >
+                  {{ file }}
+                </button>
+              </div>
             </div>
           </div>
+        </div>
+
+        <!-- 代码浏览器 -->
+        <div v-show="activeTab === 'code'" class="flex-1 overflow-hidden">
+          <CodeBrowserLite
+            ref="codeBrowserRef"
+            :repo-id="repoId"
+            :api-base="store.apiBase"
+            :initial-file="initialCodeFile"
+            @symbol-click="handleSymbolClick"
+            @file-select="handleFileSelect"
+          />
         </div>
       </main>
     </div>
@@ -193,10 +241,20 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
             </svg>
             <span class="font-semibold text-sm">AI 助手</span>
+            <span v-if="conversationId" class="text-xs text-white/60">
+              ({{ chatMessages.length }}条消息)
+            </span>
           </div>
-          <button @click="clearChat" class="text-white/80 hover:text-white text-xs">
-            清空对话
-          </button>
+          <div class="flex items-center gap-2">
+            <button @click="startNewConversation" class="text-white/80 hover:text-white text-xs" title="新对话">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+              </svg>
+            </button>
+            <button @click="clearChat" class="text-white/80 hover:text-white text-xs">
+              清空
+            </button>
+          </div>
         </div>
 
         <!-- Chat Messages -->
@@ -443,6 +501,8 @@ import { useWikiStore } from '../stores/wiki'
 import { storeToRefs } from 'pinia'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
+import CodeBrowserLite from '../components/CodeBrowserLite.vue'
+import InteractiveChart from '../components/InteractiveChart.vue'
 
 // Initialize mermaid
 mermaid.initialize({
@@ -461,6 +521,30 @@ const contentRef = ref<HTMLElement | null>(null)
 const chatMessagesRef = ref<HTMLElement | null>(null)
 const showChat = ref(false)
 const chatInput = ref('')
+
+// Tab 切换和代码浏览器
+const activeTab = ref<'docs' | 'code'>('docs')
+const codeBrowserRef = ref<InstanceType<typeof CodeBrowserLite> | null>(null)
+const initialCodeFile = ref('')
+
+// 打开代码文件
+function openCodeFile(filePath: string) {
+  initialCodeFile.value = filePath
+  activeTab.value = 'code'
+  nextTick(() => {
+    codeBrowserRef.value?.openFile(filePath)
+  })
+}
+
+// 处理符号点击
+function handleSymbolClick(symbolId: string, filePath: string, line: number) {
+  console.log('Symbol clicked:', symbolId, filePath, line)
+}
+
+// 处理文件选择
+function handleFileSelect(path: string) {
+  initialCodeFile.value = path
+}
 
 // Citation type from backend
 interface Citation {
@@ -484,6 +568,11 @@ const streamingThinking = ref('')
 const streamingCitations = ref<Citation[]>([])
 const streamThinkingExpanded = ref(true)
 const expandedThinking = ref<number[]>([])
+
+// 对话历史
+const conversationId = ref<string | null>(null)
+const conversationList = ref<Array<{ id: string; title: string; preview: string; updated_at: string }>>([])
+const showConversationList = ref(false)
 
 const showMcpModal = ref(false)
 const mcpLoading = ref(false)
@@ -829,7 +918,19 @@ renderer.code = function(token: any) {
   if (isMermaidContent(code, language)) {
     const id = `mermaid-${Math.random().toString(36).substring(2, 9)}`
     const normalized = normalizeMermaidCode(code)
-    return `<div class="mermaid-container"><pre class="mermaid" id="${id}">${normalized}</pre></div>`
+    // 使用交互式图表容器包装
+    return `<div class="interactive-mermaid-wrapper" data-mermaid-id="${id}">
+      <div class="mermaid-toolbar">
+        <button class="mermaid-zoom-in" title="放大">🔍+</button>
+        <button class="mermaid-zoom-out" title="缩小">🔍-</button>
+        <button class="mermaid-reset" title="重置">↺</button>
+        <button class="mermaid-fullscreen" title="全屏">⛶</button>
+      </div>
+      <div class="mermaid-viewport">
+        <pre class="mermaid" id="${id}">${normalized}</pre>
+      </div>
+      <div class="mermaid-hint">💡 滚轮缩放 · 拖拽移动 · 双击重置 · 点击节点跳转</div>
+    </div>`
   }
   return originalCodeRenderer(token)
 }
@@ -958,10 +1059,147 @@ async function renderMermaidDiagrams() {
     const elements = document.querySelectorAll('.mermaid:not([data-processed])')
     if (elements.length > 0) {
       await mermaid.run({ nodes: elements as NodeListOf<HTMLElement> })
+      // 渲染完成后绑定交互
+      bindMermaidInteraction()
     }
   } catch (e) {
     console.warn('Mermaid rendering error:', e)
   }
+}
+
+// 绑定 Mermaid 图表交互
+function bindMermaidInteraction() {
+  const wrappers = document.querySelectorAll('.interactive-mermaid-wrapper')
+  
+  wrappers.forEach((wrapper) => {
+    // 跳过已绑定的
+    if (wrapper.getAttribute('data-bound')) return
+    wrapper.setAttribute('data-bound', 'true')
+    
+    const viewport = wrapper.querySelector('.mermaid-viewport') as HTMLElement
+    const mermaidEl = wrapper.querySelector('.mermaid') as HTMLElement
+    if (!viewport || !mermaidEl) return
+    
+    // 状态
+    let scale = 1
+    let translateX = 0
+    let translateY = 0
+    let isDragging = false
+    let startX = 0
+    let startY = 0
+    let startTX = 0
+    let startTY = 0
+    
+    const updateTransform = () => {
+      mermaidEl.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`
+    }
+    
+    // 缩放按钮
+    const zoomInBtn = wrapper.querySelector('.mermaid-zoom-in')
+    const zoomOutBtn = wrapper.querySelector('.mermaid-zoom-out')
+    const resetBtn = wrapper.querySelector('.mermaid-reset')
+    const fullscreenBtn = wrapper.querySelector('.mermaid-fullscreen')
+    
+    zoomInBtn?.addEventListener('click', () => {
+      scale = Math.min(3, scale * 1.2)
+      updateTransform()
+    })
+    
+    zoomOutBtn?.addEventListener('click', () => {
+      scale = Math.max(0.3, scale / 1.2)
+      updateTransform()
+    })
+    
+    resetBtn?.addEventListener('click', () => {
+      scale = 1
+      translateX = 0
+      translateY = 0
+      updateTransform()
+    })
+    
+    fullscreenBtn?.addEventListener('click', () => {
+      wrapper.classList.toggle('fullscreen')
+    })
+    
+    // 滚轮缩放
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault()
+      const delta = e.deltaY > 0 ? 0.9 : 1.1
+      scale = Math.max(0.3, Math.min(3, scale * delta))
+      updateTransform()
+    })
+    
+    // 拖拽
+    viewport.addEventListener('mousedown', (e) => {
+      const target = e.target as HTMLElement
+      if (target.closest('.node') || target.closest('a')) return
+      
+      isDragging = true
+      startX = e.clientX
+      startY = e.clientY
+      startTX = translateX
+      startTY = translateY
+      viewport.style.cursor = 'grabbing'
+    })
+    
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return
+      translateX = startTX + (e.clientX - startX)
+      translateY = startTY + (e.clientY - startY)
+      updateTransform()
+    })
+    
+    document.addEventListener('mouseup', () => {
+      isDragging = false
+      viewport.style.cursor = 'grab'
+    })
+    
+    // 双击重置
+    viewport.addEventListener('dblclick', () => {
+      scale = 1
+      translateX = 0
+      translateY = 0
+      updateTransform()
+    })
+    
+    // 节点点击
+    mermaidEl.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement
+      const node = target.closest('.node') || target.closest('g[id^="flowchart-"]')
+      
+      if (node) {
+        const textEl = node.querySelector('text, .nodeLabel, span')
+        const nodeText = textEl?.textContent?.trim() || ''
+        
+        if (nodeText) {
+          // 尝试匹配模块
+          const normalizedText = nodeText.toLowerCase()
+          const matchedPage = pages.value.find(p => {
+            if (p.kind !== 'module') return false
+            const title = (p.title || '').toLowerCase()
+            return title.includes(normalizedText) || normalizedText.includes(title)
+          })
+          
+          if (matchedPage) {
+            const idx = pages.value.indexOf(matchedPage)
+            if (idx >= 0) {
+              selectPage(idx)
+            }
+          } else {
+            // 打开源码浏览
+            const possibleFile = nodeText.replace(/\s+/g, '') + '.py'
+            openCodeFile(possibleFile)
+          }
+        }
+      }
+    })
+    
+    // 隐藏提示
+    setTimeout(() => {
+      const hint = wrapper.querySelector('.mermaid-hint') as HTMLElement
+      if (hint) hint.style.display = 'none'
+    }, 5000)
+  })
 }
 
 onMounted(async () => {
@@ -969,6 +1207,9 @@ onMounted(async () => {
   await store.loadRepos()
   await store.loadSummary('zh')
   await renderMermaidDiagrams()
+  
+  // 恢复对话历史
+  loadChatFromStorage()
   
   // Update chat position on window resize
   window.addEventListener('resize', handleWindowResize)
@@ -1185,6 +1426,78 @@ function jumpToCitation(citation: Citation) {
 function clearChat() {
   chatMessages.value = []
   expandedThinking.value = []
+  conversationId.value = null
+  // 保存空对话状态
+  saveChatToStorage()
+}
+
+// 加载对话历史列表
+async function loadConversationList() {
+  try {
+    const res = await fetch(`${store.apiBase}/repos/${repoId.value}/conversations?limit=20`)
+    if (res.ok) {
+      const data = await res.json()
+      conversationList.value = data.conversations || []
+    }
+  } catch (err) {
+    console.error('Failed to load conversations:', err)
+  }
+}
+
+// 加载指定对话
+async function loadConversation(convId: string) {
+  try {
+    const res = await fetch(`${store.apiBase}/repos/${repoId.value}/conversations/${convId}`)
+    if (res.ok) {
+      const data = await res.json()
+      conversationId.value = data.id
+      chatMessages.value = (data.messages || []).map((m: any) => ({
+        role: m.role,
+        content: m.content,
+        thinking: m.thinking,
+        citations: m.citations,
+      }))
+      expandedThinking.value = []
+      showConversationList.value = false
+      saveChatToStorage()
+    }
+  } catch (err) {
+    console.error('Failed to load conversation:', err)
+  }
+}
+
+// 创建新对话
+function startNewConversation() {
+  chatMessages.value = []
+  conversationId.value = null
+  expandedThinking.value = []
+  showConversationList.value = false
+  saveChatToStorage()
+}
+
+// 保存对话到 localStorage
+function saveChatToStorage() {
+  const key = `chat_${repoId.value}`
+  const data = {
+    conversationId: conversationId.value,
+    messages: chatMessages.value,
+  }
+  localStorage.setItem(key, JSON.stringify(data))
+}
+
+// 从 localStorage 恢复对话
+function loadChatFromStorage() {
+  const key = `chat_${repoId.value}`
+  const raw = localStorage.getItem(key)
+  if (raw) {
+    try {
+      const data = JSON.parse(raw)
+      conversationId.value = data.conversationId || null
+      chatMessages.value = data.messages || []
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function toggleThinking(idx: number) {
@@ -1228,15 +1541,16 @@ async function sendMessage() {
   let receivedCitations: Citation[] = []
   
   try {
-    const response = await fetch(`${store.apiBase}/repos/${repoId.value}/answer/stream`, {
+    // 使用带对话历史的 chat/stream API
+    const response = await fetch(`${store.apiBase}/repos/${repoId.value}/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        query: userMessage,
+        message: userMessage,
+        conversation_id: conversationId.value,
         model: store.model,
-        max_evidence: 5,
       }),
     })
     
@@ -1259,7 +1573,12 @@ async function sendMessage() {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
-              if (data.type === 'citations') {
+              if (data.type === 'meta') {
+                // 获取或更新 conversation_id
+                if (data.conversation_id) {
+                  conversationId.value = data.conversation_id
+                }
+              } else if (data.type === 'citations') {
                 // Handle citations from RAG search
                 receivedCitations = data.citations || []
                 streamingCitations.value = receivedCitations
@@ -1302,6 +1621,9 @@ async function sendMessage() {
       thinking: finalThinking || undefined,
       citations: receivedCitations.length > 0 ? receivedCitations : undefined,
     })
+    
+    // 保存对话到 localStorage
+    saveChatToStorage()
     
     // Auto-collapse thinking after done
     // (don't add to expandedThinking, so it's collapsed by default)
@@ -1456,6 +1778,113 @@ async function sendMessage() {
   color: inherit;
   padding: 0;
   margin: 0;
+}
+
+/* Interactive Mermaid Wrapper */
+.interactive-mermaid-wrapper {
+  position: relative;
+  margin: 1.5rem 0;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.interactive-mermaid-wrapper.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  margin: 0;
+  border-radius: 0;
+  background: white;
+}
+
+.mermaid-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.mermaid-toolbar button {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--card-bg);
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.mermaid-toolbar button:hover {
+  background: var(--accent-primary);
+  color: white;
+  border-color: var(--accent-primary);
+}
+
+.mermaid-viewport {
+  overflow: hidden;
+  cursor: grab;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.mermaid-viewport:active {
+  cursor: grabbing;
+}
+
+.mermaid-viewport .mermaid {
+  transition: transform 0.1s ease-out;
+  transform-origin: center center;
+}
+
+.mermaid-viewport .mermaid svg {
+  max-width: none !important;
+}
+
+/* 节点交互样式 */
+.mermaid-viewport .node {
+  cursor: pointer;
+}
+
+.mermaid-viewport .node:hover rect,
+.mermaid-viewport .node:hover circle,
+.mermaid-viewport .node:hover polygon {
+  stroke: var(--accent-primary) !important;
+  stroke-width: 2px !important;
+}
+
+.mermaid-viewport .node:hover .nodeLabel {
+  font-weight: bold;
+}
+
+.mermaid-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 11px;
+  border-radius: 16px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.fullscreen .mermaid-viewport {
+  height: calc(100vh - 44px);
+}
+
+.fullscreen .mermaid-toolbar button:last-child::before {
+  content: '✕';
 }
 
 /* Chat prose styles */

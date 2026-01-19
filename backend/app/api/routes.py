@@ -25,7 +25,7 @@ from app.models.schemas import (
 from app.core.jobs import create_job, get_job, set_job, is_job_canceled
 from app.core.logging import get_job_logger
 from app.services.ingest import ingest_repo
-from app.services.faiss_index import search_index, build_index
+from app.services.faiss_index import search_index, build_index, hybrid_search, keyword_search
 from app.services.chunking import build_chunks_from_docs
 from app.services.analysis import run_analysis
 from app.services.db import (
@@ -92,6 +92,11 @@ from app.services.mcp_generator import (
     get_mcp_tools_list,
 )
 from app.services.mcp_runtime import start_mcp_server, stop_mcp_server, get_mcp_status
+from app.services.code_explain import (
+    explain_code_snippet,
+    explain_symbol,
+    explain_file,
+)
 from pathlib import Path
 import os
 import shutil
@@ -592,6 +597,56 @@ def repo_search(repo_id: str, request: SearchRequest):
     return {"results": results}
 
 
+@router.post("/repos/{repo_id}/search/hybrid")
+def repo_search_hybrid(
+    repo_id: str,
+    query: str = Body(..., embed=True),
+    top_k: int = Body(8, embed=True),
+    search_type: str = Body("hybrid", embed=True),
+    semantic_weight: float = Body(0.7, embed=True),
+    keyword_weight: float = Body(0.3, embed=True),
+):
+    """
+    混合搜索接口
+    
+    Args:
+        repo_id: 仓库ID
+        query: 查询字符串
+        top_k: 返回结果数
+        search_type: 搜索类型 (hybrid/semantic/keyword)
+        semantic_weight: 语义搜索权重
+        keyword_weight: 关键词搜索权重
+    
+    Returns:
+        搜索结果列表
+    """
+    if search_type == "keyword":
+        hits = keyword_search(repo_id, query, top_k)
+    elif search_type == "semantic":
+        hits = search_index(repo_id, query, top_k)
+    else:  # hybrid
+        hits = hybrid_search(
+            repo_id, query, top_k,
+            semantic_weight=semantic_weight,
+            keyword_weight=keyword_weight,
+        )
+    
+    results = []
+    for hit in hits:
+        results.append({
+            "chunk_id": hit.chunk.id,
+            "text": hit.chunk.text,
+            "score": hit.score,
+            "citations": [c.__dict__ for c in hit.chunk.citations],
+        })
+    
+    return {
+        "results": results,
+        "search_type": search_type,
+        "query": query,
+    }
+
+
 @router.post("/repos/{repo_id}/answer", response_model=AnswerResponse)
 def repo_answer(repo_id: str, request: AnswerRequest):
     hits = search_index(repo_id, request.query, request.max_evidence)
@@ -1052,3 +1107,310 @@ def repo_mcp_start(repo_id: str, payload: dict = Body(default=None)):
 def repo_mcp_stop(repo_id: str):
     """停止 MCP 服务"""
     return stop_mcp_server(repo_id)
+
+
+# ============== 对话历史 API ==============
+
+from app.services.conversation import (
+    create_conversation,
+    get_conversation,
+    list_conversations,
+    add_message,
+    delete_conversation,
+    clear_conversation,
+    get_context_messages,
+)
+
+
+@router.get("/repos/{repo_id}/conversations")
+def repo_list_conversations(repo_id: str, limit: int = Query(50, description="最大返回数量")):
+    """列出仓库的所有对话"""
+    conversations = list_conversations(repo_id, limit)
+    return {"conversations": conversations}
+
+
+@router.post("/repos/{repo_id}/conversations")
+def repo_create_conversation(repo_id: str, title: Optional[str] = None):
+    """创建新对话"""
+    conv = create_conversation(repo_id, title)
+    return conv.to_dict()
+
+
+@router.get("/repos/{repo_id}/conversations/{conversation_id}")
+def repo_get_conversation(repo_id: str, conversation_id: str):
+    """获取对话详情"""
+    conv = get_conversation(conversation_id)
+    if not conv or conv.repo_id != repo_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return conv.to_dict()
+
+
+@router.delete("/repos/{repo_id}/conversations/{conversation_id}")
+def repo_delete_conversation(repo_id: str, conversation_id: str):
+    """删除对话"""
+    conv = get_conversation(conversation_id)
+    if not conv or conv.repo_id != repo_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    delete_conversation(conversation_id)
+    return {"message": "对话已删除"}
+
+
+@router.post("/repos/{repo_id}/conversations/{conversation_id}/clear")
+def repo_clear_conversation(repo_id: str, conversation_id: str):
+    """清空对话消息"""
+    conv = get_conversation(conversation_id)
+    if not conv or conv.repo_id != repo_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    clear_conversation(conversation_id)
+    return {"message": "对话已清空"}
+
+
+@router.post("/repos/{repo_id}/chat")
+def repo_chat(
+    repo_id: str,
+    message: str = Body(..., embed=True),
+    conversation_id: Optional[str] = Body(None, embed=True),
+    model: Optional[dict] = Body(None, embed=True),
+):
+    """
+    带历史的对话接口
+    
+    如果提供 conversation_id，将使用历史上下文；
+    否则创建新对话。
+    """
+    # 获取或创建对话
+    if conversation_id:
+        conv = get_conversation(conversation_id)
+        if not conv or conv.repo_id != repo_id:
+            raise HTTPException(status_code=404, detail="conversation not found")
+    else:
+        conv = create_conversation(repo_id)
+        conversation_id = conv.id
+    
+    # 添加用户消息
+    add_message(conversation_id, "user", message)
+    
+    # 获取历史上下文
+    context_messages = get_context_messages(conversation_id, max_messages=10, max_tokens=4000)
+    
+    # 搜索相关内容
+    hits = search_index(repo_id, message, 5)
+    evidence = []
+    citations = []
+    for hit in hits:
+        evidence.append(hit.chunk.text)
+        citations.extend([c.__dict__ for c in hit.chunk.citations])
+    
+    # 构建系统提示
+    system_prompt = (
+        "你是一个代码库分析助手。使用提供的证据回答问题。"
+        "用中文简洁回答，只陈述可验证的事实。"
+    )
+    
+    # 构建消息列表
+    llm_messages = [LLMMessage(role="system", content=system_prompt)]
+    
+    # 添加历史消息（排除最后一条刚添加的用户消息）
+    for ctx_msg in context_messages[:-1]:
+        llm_messages.append(LLMMessage(role=ctx_msg["role"], content=ctx_msg["content"]))
+    
+    # 添加当前问题和证据
+    user_prompt = "\n\n".join(["证据:", *evidence, "问题:", message]) if evidence else message
+    llm_messages.append(LLMMessage(role="user", content=user_prompt))
+    
+    # 调用 LLM
+    effective_model = get_effective_llm_config(model)
+    answer, usage = chat_completion_with_usage(llm_messages, effective_model)
+    
+    # 记录 token 使用
+    record_token_usage(
+        repo_id,
+        kind="llm",
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
+        total_tokens=usage.get("total_tokens", 0),
+        is_estimated=usage.get("is_estimated", True),
+        source="repo_chat",
+    )
+    
+    # 添加助手消息
+    add_message(conversation_id, "assistant", answer, citations=citations)
+    
+    return {
+        "answer": answer,
+        "citations": citations,
+        "conversation_id": conversation_id,
+    }
+
+
+@router.post("/repos/{repo_id}/chat/stream")
+def repo_chat_stream(
+    repo_id: str,
+    message: str = Body(..., embed=True),
+    conversation_id: Optional[str] = Body(None, embed=True),
+    model: Optional[dict] = Body(None, embed=True),
+    search_type: str = Body("hybrid", embed=True),
+):
+    """
+    带历史的流式对话接口
+    
+    Args:
+        search_type: 搜索类型 (hybrid/semantic/keyword)
+    """
+    # 获取或创建对话
+    if conversation_id:
+        conv = get_conversation(conversation_id)
+        if not conv or conv.repo_id != repo_id:
+            raise HTTPException(status_code=404, detail="conversation not found")
+    else:
+        conv = create_conversation(repo_id)
+        conversation_id = conv.id
+    
+    # 添加用户消息
+    add_message(conversation_id, "user", message)
+    
+    # 获取历史上下文
+    context_messages = get_context_messages(conversation_id, max_messages=10, max_tokens=4000)
+    
+    # 使用混合搜索
+    if search_type == "keyword":
+        hits = keyword_search(repo_id, message, 5)
+    elif search_type == "semantic":
+        hits = search_index(repo_id, message, 5)
+    else:  # hybrid
+        hits = hybrid_search(repo_id, message, 5)
+    
+    def generate():
+        evidence = []
+        citations = []
+        for hit in hits:
+            evidence.append(hit.chunk.text)
+            citations.extend([c.__dict__ for c in hit.chunk.citations])
+        
+        # 发送 conversation_id 和 citations
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conversation_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
+        
+        # 构建消息
+        system_prompt = (
+            "你是一个代码库分析助手。使用提供的证据回答问题。"
+            "用中文简洁回答，只陈述可验证的事实。"
+        )
+        
+        llm_messages = [LLMMessage(role="system", content=system_prompt)]
+        for ctx_msg in context_messages[:-1]:
+            llm_messages.append(LLMMessage(role=ctx_msg["role"], content=ctx_msg["content"]))
+        
+        user_prompt = "\n\n".join(["证据:", *evidence, "问题:", message]) if evidence else message
+        llm_messages.append(LLMMessage(role="user", content=user_prompt))
+        
+        # 流式生成
+        full_content = ""
+        full_thinking = ""
+        stream_usage = None
+        
+        try:
+            effective_model = get_effective_llm_config(model)
+            for chunk in chat_completion_stream(
+                llm_messages,
+                effective_model,
+                enable_thinking=True,
+            ):
+                if chunk["type"] == "usage":
+                    stream_usage = chunk.get("usage") or {}
+                    continue
+                if chunk["type"] == "thinking":
+                    full_thinking += chunk["text"]
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': chunk['text']})}\n\n"
+                else:
+                    full_content += chunk["text"]
+                    yield f"data: {json.dumps({'type': 'content', 'content': chunk['text']})}\n\n"
+            
+            # 保存助手消息
+            add_message(
+                conversation_id, 
+                "assistant", 
+                full_content,
+                thinking=full_thinking if full_thinking else None,
+                citations=citations if citations else None,
+            )
+            
+            if stream_usage:
+                record_token_usage(
+                    repo_id,
+                    kind="llm",
+                    prompt_tokens=int(stream_usage.get("prompt_tokens") or 0),
+                    completion_tokens=int(stream_usage.get("completion_tokens") or 0),
+                    total_tokens=int(stream_usage.get("total_tokens") or 0),
+                    is_estimated=False,
+                    source="repo_chat_stream",
+                )
+            
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ============== 代码解释 API ==============
+
+@router.post("/repos/{repo_id}/explain/snippet")
+def repo_explain_snippet(
+    repo_id: str,
+    file_path: str = Body(..., embed=True),
+    line_start: int = Body(..., embed=True),
+    line_end: int = Body(..., embed=True),
+    model: Optional[dict] = Body(None, embed=True),
+):
+    """
+    解释代码片段
+    """
+    result = explain_code_snippet(repo_id, file_path, line_start, line_end, model)
+    return {
+        "explanation": result.explanation,
+        "summary": result.summary,
+        "context": result.context,
+        "related_symbols": result.related_symbols,
+        "complexity": result.complexity,
+    }
+
+
+@router.post("/repos/{repo_id}/explain/symbol/{symbol_id}")
+def repo_explain_symbol(
+    repo_id: str,
+    symbol_id: str,
+    model: Optional[dict] = Body(None, embed=True),
+):
+    """
+    解释符号（函数/类）
+    """
+    result = explain_symbol(repo_id, symbol_id, model)
+    return {
+        "summary": result.summary,
+        "params": result.params,
+        "returns": result.returns,
+        "examples": result.examples,
+        "complexity": result.complexity,
+        "side_effects": result.side_effects,
+    }
+
+
+@router.post("/repos/{repo_id}/explain/file")
+def repo_explain_file(
+    repo_id: str,
+    file_path: str = Body(..., embed=True),
+    model: Optional[dict] = Body(None, embed=True),
+):
+    """
+    解释整个文件
+    """
+    return explain_file(repo_id, file_path, model)
