@@ -1,6 +1,6 @@
 SYSTEM_PROMPT = """
 <ROLE>
-You are an AI documentation assistant. Your task is to generate comprehensive system documentation based on a given module name and its core code components.
+You are an AI documentation assistant specialized in generating comprehensive, accurate system documentation. Your documentation should help developers understand, maintain, and extend the codebase.
 </ROLE>
 
 <OBJECTIVES>
@@ -8,33 +8,69 @@ Create documentation that helps developers and maintainers understand:
 1. The module's purpose and core functionality
 2. Architecture and component relationships
 3. How the module fits into the overall system
+4. Data flow and control flow through the module
+5. Public APIs and their usage patterns
 </OBJECTIVES>
+
+<ANALYSIS_CHECKLIST>
+Before generating documentation, analyze:
+1. **Entry Points**: main functions, CLI commands, API endpoints, public classes
+2. **Design Patterns**: Factory, Singleton, Observer, Strategy, etc.
+3. **Data Flow**: Input → Processing → Output paths
+4. **Error Handling**: Exception types and recovery strategies
+5. **Configuration**: Environment variables, config files, parameters
+6. **Public API**: Classes/functions intended for external use (no underscore prefix)
+7. **Internal Utilities**: Helper functions, private classes (underscore prefix)
+8. **Dependencies**: External libraries and internal module dependencies
+</ANALYSIS_CHECKLIST>
+
+<ACCURACY_REQUIREMENTS>
+- ONLY document what is explicitly present in the code
+- DO NOT invent features or behaviors not shown in source code
+- Mark uncertain information with [NEEDS VERIFICATION]
+- Include actual code snippets as examples when applicable
+- Verify all class/function names exist before referencing them
+</ACCURACY_REQUIREMENTS>
 
 <DOCUMENTATION_STRUCTURE>
 Generate documentation following this structure:
 
 1. **Main Documentation File** (`{module_name}.md`):
-   - Brief introduction and purpose
-   - Architecture overview with diagrams
-   - High-level functionality of each sub-module including references to its documentation file
-   - Link to other module documentation instead of duplicating information
+   - Brief introduction and purpose (2-3 sentences)
+   - Architecture overview with Mermaid diagrams
+   - Key components table with brief descriptions
+   - High-level functionality of each sub-module with links
+   - Usage examples where applicable
 
 2. **Sub-module Documentation** (if applicable):
-   - Detailed descriptions of each sub-module saved in the working directory under the name of `sub-module_name.md`
+   - Detailed descriptions saved as `sub-module_name.md`
    - Core components and their responsibilities
+   - API reference for public interfaces
+   - Error handling patterns
 
 3. **Visual Documentation**:
-   - Mermaid diagrams for architecture, dependencies, and data flow
-   - Component interaction diagrams
-   - Process flow diagrams where relevant
+   - Architecture diagram (class/component relationships)
+   - Data flow diagram (how data moves through the system)
+   - Sequence diagrams for key operations
+   - Dependency graph (what depends on what)
 </DOCUMENTATION_STRUCTURE>
 
+<MERMAID_BEST_PRACTICES>
+- Use classDiagram for class relationships
+- Use flowchart TD for data flow
+- Use sequenceDiagram for process interactions
+- Keep diagrams focused (max 10-15 nodes)
+- Use meaningful labels and descriptions
+- Validate syntax before including
+</MERMAID_BEST_PRACTICES>
+
 <WORKFLOW>
-1. Analyze the provided code components and module structure, explore the not given dependencies between the components if needed
-2. Create the main `{module_name}.md` file with overview and architecture in working directory
-3. Use `generate_sub_module_documentation` to generate detailed sub-modules documentation for COMPLEX modules which at least have more than 1 code file and are able to clearly split into sub-modules
-4. Include relevant Mermaid diagrams throughout the documentation
-5. After all sub-modules are documented, adjust `{module_name}.md` with ONLY ONE STEP to ensure all generated files including sub-modules documentation are properly cross-refered
+1. Analyze the provided code components and dependency graph
+2. Identify entry points, public APIs, and key patterns
+3. Create the main `{module_name}.md` file with overview and architecture
+4. Use `generate_sub_module_documentation` for complex modules (>1 file, clear boundaries)
+5. Include relevant Mermaid diagrams throughout
+6. Cross-reference all generated documentation files
 </WORKFLOW>
 
 <AVAILABLE_TOOLS>
@@ -47,27 +83,66 @@ Generate documentation following this structure:
 
 LEAF_SYSTEM_PROMPT = """
 <ROLE>
-You are an AI documentation assistant. Your task is to generate comprehensive system documentation based on a given module name and its core code components.
+You are an AI documentation assistant specialized in generating accurate, developer-friendly documentation for code modules.
 </ROLE>
 
 <OBJECTIVES>
-Create a comprehensive documentation that helps developers and maintainers understand:
-1. The module's purpose and core functionality
-2. Architecture and component relationships
-3. How the module fits into the overall system
+Create comprehensive documentation that helps developers:
+1. Understand the module's purpose and responsibilities
+2. Learn the public API and usage patterns
+3. Understand component relationships and dependencies
+4. Identify entry points and key workflows
 </OBJECTIVES>
 
-<DOCUMENTATION_REQUIREMENTS>
-Generate documentation following the following requirements:
-1. Structure: Brief introduction → comprehensive documentation with Mermaid diagrams
-2. Diagrams: Include architecture, dependencies, data flow, component interaction, and process flows as relevant
-3. References: Link to other module documentation instead of duplicating information
-</DOCUMENTATION_REQUIREMENTS>
+<ACCURACY_REQUIREMENTS>
+- ONLY document what is explicitly present in the code
+- DO NOT invent features or behaviors not shown in source
+- Include actual code snippets from the provided source
+- Verify all referenced names exist in the code
+- When uncertain, indicate with [NEEDS VERIFICATION]
+</ACCURACY_REQUIREMENTS>
+
+<DOCUMENTATION_STRUCTURE>
+Generate `{module_name}.md` with the following structure:
+
+1. **Overview** (2-3 sentences)
+   - Module purpose and primary responsibility
+   
+2. **Architecture** (Mermaid diagram)
+   - Component relationships
+   - Key classes and their roles
+   
+3. **Core Components**
+   - For each public class/function:
+     - Purpose and responsibility
+     - Key methods/parameters
+     - Usage example (if applicable)
+
+4. **Data Flow** (if applicable)
+   - How data moves through the module
+   - Input → Processing → Output
+
+5. **Dependencies**
+   - What this module depends on
+   - What depends on this module
+
+6. **Usage Examples**
+   - Real code patterns from the source
+</DOCUMENTATION_STRUCTURE>
+
+<MERMAID_GUIDELINES>
+- Use classDiagram for OOP relationships
+- Use flowchart TD for process flows
+- Keep diagrams focused (max 8-10 nodes)
+- Include brief labels/descriptions
+- Test syntax validity before including
+</MERMAID_GUIDELINES>
 
 <WORKFLOW>
-1. Analyze provided code components and module structure
-2. Explore dependencies between components if needed
-3. Generate complete {module_name}.md documentation file
+1. Analyze provided code and dependency graph
+2. Identify public API, entry points, key patterns
+3. Generate complete {module_name}.md documentation
+4. Include appropriate Mermaid diagrams
 </WORKFLOW>
 
 <AVAILABLE_TOOLS>
@@ -78,12 +153,21 @@ Generate documentation following the following requirements:
 """.strip()
 
 USER_PROMPT = """
-Generate comprehensive documentation for the {module_name} module using the provided module tree and core components.
+Generate comprehensive documentation for the {module_name} module using the provided module tree, dependency graph, and core components.
 
 <MODULE_TREE>
 {module_tree}
 </MODULE_TREE>
 * NOTE: You can refer the other modules in the module tree based on the dependencies between their core components to make the documentation more structured and avoid repeating the same information. Know that all documentation files are saved in the same folder not structured as module tree. e.g. [alt text]([ref_module_name].md)
+
+<DEPENDENCY_GRAPH>
+{dependency_info}
+</DEPENDENCY_GRAPH>
+* NOTE: The dependency graph shows which components depend on other components. Use this information to:
+  - Understand the data flow and control flow
+  - Identify entry points (components with many dependents but few dependencies)
+  - Identify utility/helper components (components used by many others)
+  - Create accurate architecture and sequence diagrams
 
 <CORE_COMPONENT_CODES>
 {formatted_core_component_codes}
@@ -210,7 +294,8 @@ Please shortlist the files, folders representing the core functionality and igno
 Reasoning at first, then return the list of relative paths in JSON format.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Set
+from collections import defaultdict
 from codewiki.src.utils import file_manager
 
 EXTENSION_TO_LANGUAGE = {
@@ -241,6 +326,82 @@ EXTENSION_TO_LANGUAGE = {
 }
 
 
+def build_dependency_info(core_component_ids: List[str], components: Dict[str, Any]) -> str:
+    """
+    构建依赖关系信息字符串。
+    
+    Args:
+        core_component_ids: 核心组件ID列表
+        components: 所有组件字典
+        
+    Returns:
+        格式化的依赖关系信息
+    """
+    core_set = set(core_component_ids)
+    
+    # 构建依赖图和反向依赖图
+    depends_on: Dict[str, Set[str]] = defaultdict(set)  # 组件依赖的其他组件
+    used_by: Dict[str, Set[str]] = defaultdict(set)      # 被其他组件使用
+    
+    for comp_id in core_component_ids:
+        if comp_id not in components:
+            continue
+        component = components[comp_id]
+        
+        # 获取组件的依赖
+        deps = getattr(component, 'depends_on', set())
+        if isinstance(deps, (set, list)):
+            for dep_id in deps:
+                # 只关注模块内的依赖或可识别的外部依赖
+                if dep_id in core_set:
+                    depends_on[comp_id].add(dep_id)
+                    used_by[dep_id].add(comp_id)
+                elif dep_id in components:
+                    # 外部依赖，标注
+                    depends_on[comp_id].add(f"{dep_id} (external)")
+    
+    lines = []
+    
+    # 1. 统计信息
+    lines.append("## Dependency Statistics")
+    lines.append(f"- Total components: {len(core_component_ids)}")
+    lines.append(f"- Components with dependencies: {len([c for c in depends_on if depends_on[c]])}")
+    lines.append(f"- Components used by others: {len([c for c in used_by if used_by[c]])}")
+    lines.append("")
+    
+    # 2. 识别入口点（被多个组件使用但依赖较少的组件）
+    entry_points = []
+    for comp_id in core_component_ids:
+        deps_count = len(depends_on.get(comp_id, set()))
+        used_count = len(used_by.get(comp_id, set()))
+        if used_count >= 2 and deps_count <= 1:
+            entry_points.append((comp_id, used_count))
+    
+    if entry_points:
+        lines.append("## Potential Entry Points / Core Components")
+        lines.append("(Components used by many others but have few dependencies)")
+        for comp_id, count in sorted(entry_points, key=lambda x: -x[1])[:5]:
+            lines.append(f"- {comp_id} (used by {count} components)")
+        lines.append("")
+    
+    # 3. 详细依赖关系
+    lines.append("## Component Dependencies")
+    for comp_id in core_component_ids:
+        if comp_id not in components:
+            continue
+        deps = depends_on.get(comp_id, set())
+        users = used_by.get(comp_id, set())
+        
+        if deps or users:
+            lines.append(f"### {comp_id}")
+            if deps:
+                lines.append(f"  Depends on: {', '.join(sorted(deps))}")
+            if users:
+                lines.append(f"  Used by: {', '.join(sorted(users))}")
+    
+    return "\n".join(lines) if lines else "No dependency information available."
+
+
 def format_user_prompt(module_name: str, core_component_ids: list[str], components: Dict[str, Any], module_tree: dict[str, any]) -> str:
     """
     Format the user prompt with module name and organized core component codes.
@@ -249,6 +410,7 @@ def format_user_prompt(module_name: str, core_component_ids: list[str], componen
         module_name: Name of the module to document
         core_component_ids: List of component IDs to include
         components: Dictionary mapping component IDs to CodeComponent objects
+        module_tree: Module tree structure
     
     Returns:
         Formatted user prompt string
@@ -257,8 +419,8 @@ def format_user_prompt(module_name: str, core_component_ids: list[str], componen
     # format module tree
     lines = []
     
-    def _format_module_tree(module_tree: dict[str, any], indent: int = 0):
-        for key, value in module_tree.items():
+    def _format_module_tree(tree: dict[str, any], indent: int = 0):
+        for key, value in tree.items():
             if key == module_name:
                 lines.append(f"{'  ' * indent}{key} (current module)")
             else:
@@ -272,7 +434,8 @@ def format_user_prompt(module_name: str, core_component_ids: list[str], componen
     _format_module_tree(module_tree, 0)
     formatted_module_tree = "\n".join(lines)
 
-    # print(f"Formatted module tree:\n{formatted_module_tree}")
+    # 构建依赖关系信息
+    dependency_info = build_dependency_info(core_component_ids, components)
 
     # Group core component IDs by their file path
     grouped_components: dict[str, list[str]] = {}
@@ -291,9 +454,27 @@ def format_user_prompt(module_name: str, core_component_ids: list[str], componen
         core_component_codes += f"## Core Components in this file:\n"
         
         for component_id in component_ids_in_file:
-            core_component_codes += f"- {component_id}\n"
+            comp = components.get(component_id)
+            if comp:
+                # 添加组件的额外元信息
+                comp_type = getattr(comp, 'component_type', 'unknown')
+                display_name = getattr(comp, 'display_name', component_id)
+                docstring = getattr(comp, 'docstring', '')
+                core_component_codes += f"- {component_id} ({comp_type})"
+                if docstring:
+                    # 只显示docstring的第一行
+                    first_line = docstring.split('\n')[0].strip()[:80]
+                    if first_line:
+                        core_component_codes += f": {first_line}"
+                core_component_codes += "\n"
+            else:
+                core_component_codes += f"- {component_id}\n"
         
-        core_component_codes += f"\n## File Content:\n```{EXTENSION_TO_LANGUAGE['.'+path.split('.')[-1]]}\n"
+        # 获取文件扩展名对应的语言
+        ext = '.' + path.split('.')[-1] if '.' in path else ''
+        lang = EXTENSION_TO_LANGUAGE.get(ext, 'text')
+        
+        core_component_codes += f"\n## File Content:\n```{lang}\n"
         
         # Read content of the file using the first component's file path
         try:
@@ -303,7 +484,12 @@ def format_user_prompt(module_name: str, core_component_ids: list[str], componen
         
         core_component_codes += "```\n\n"
         
-    return USER_PROMPT.format(module_name=module_name, formatted_core_component_codes=core_component_codes, module_tree=formatted_module_tree)
+    return USER_PROMPT.format(
+        module_name=module_name, 
+        formatted_core_component_codes=core_component_codes, 
+        module_tree=formatted_module_tree,
+        dependency_info=dependency_info
+    )
 
 
 

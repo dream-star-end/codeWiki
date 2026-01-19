@@ -268,83 +268,230 @@ def build_graph_from_components(components: Dict[str, Any]) -> Dict[str, Set[str
     return graph 
 
 
-def get_leaf_nodes(graph: Dict[str, Set[str]], components: Dict[str, Node]) -> List[str]:
+def analyze_component_distribution(components: Dict[str, Node]) -> Dict[str, Any]:
     """
-    Find leaf nodes (nodes that no other nodes depend on) and build dependency trees
-    showing the full dependency chain from each leaf back to the ultimate dependencies.
-    
-    The graph uses natural dependency direction:
-    - If A depends on B, the graph has an edge A → B
-    - Leaf nodes are nodes that appear in no other node's dependency set
-    - Each tree shows the dependency chain: leaf → its dependencies → their dependencies, etc.
+    分析组件类型分布，为类型选择提供依据。
     
     Args:
-        graph: A dependency graph with natural direction (A→B if A depends on B)
+        components: 组件字典
+        
+    Returns:
+        包含类型统计和建议的字典
+    """
+    from collections import Counter
+    
+    type_counts = Counter(comp.component_type for comp in components.values())
+    
+    # 计算OOP类型（类、接口、结构体）的总数
+    oop_types = {"class", "interface", "struct", "enum", "record", "abstract class"}
+    oop_count = sum(type_counts.get(t, 0) for t in oop_types)
+    
+    # 计算函数类型的总数
+    func_types = {"function", "async_function", "method"}
+    func_count = sum(type_counts.get(t, 0) for t in func_types)
+    
+    total = len(components)
+    
+    return {
+        "type_counts": dict(type_counts),
+        "oop_count": oop_count,
+        "func_count": func_count,
+        "total": total,
+        "oop_ratio": oop_count / total if total > 0 else 0,
+        "func_ratio": func_count / total if total > 0 else 0
+    }
+
+
+def determine_valid_types(components: Dict[str, Node]) -> Set[str]:
+    """
+    动态确定应该包含的有效组件类型。
+    
+    基于代码库的实际类型分布来决定，而不是简单的有/无判断。
+    
+    Args:
+        components: 组件字典
+        
+    Returns:
+        有效的组件类型集合
+    """
+    dist = analyze_component_distribution(components)
+    
+    # 基础OOP类型
+    valid_types = {"class", "interface", "struct", "enum", "record", "abstract class", "annotation"}
+    
+    # 决策逻辑：
+    # 1. 如果OOP类型占比 < 10%，说明是C风格代码库，包含函数
+    # 2. 如果OOP类型数量为0，必须包含函数
+    # 3. 如果OOP类型数量很少（<5）但函数很多，也包含重要函数
+    
+    if dist["oop_count"] == 0:
+        # 纯函数式/C风格代码库
+        valid_types.update({"function", "async_function"})
+        logger.debug("No OOP types found, including functions")
+    elif dist["oop_ratio"] < 0.1 and dist["func_count"] > 20:
+        # OOP类型稀少，主要是函数
+        valid_types.update({"function", "async_function"})
+        logger.debug(f"Low OOP ratio ({dist['oop_ratio']:.2%}), including functions")
+    elif dist["oop_count"] < 5 and dist["func_count"] > 50:
+        # 几乎没有OOP，包含函数
+        valid_types.update({"function", "async_function"})
+        logger.debug(f"Very few OOP types ({dist['oop_count']}), including functions")
+    
+    return valid_types
+
+
+def calculate_component_importance(comp_id: str, components: Dict[str, Node], 
+                                   graph: Dict[str, Set[str]]) -> float:
+    """
+    计算组件的重要性分数。
+    
+    重要性基于：
+    1. 被其他组件依赖的程度（被依赖越多越重要）
+    2. 是否是入口点（main, __main__, 公开API）
+    3. 文档完整度（有docstring的更重要）
+    
+    Args:
+        comp_id: 组件ID
+        components: 组件字典
+        graph: 依赖图
+        
+    Returns:
+        重要性分数（0-100）
+    """
+    if comp_id not in components:
+        return 0
+    
+    comp = components[comp_id]
+    score = 0
+    
+    # 1. 计算被依赖程度
+    used_by_count = sum(1 for deps in graph.values() if comp_id in deps)
+    score += min(used_by_count * 5, 30)  # 最多30分
+    
+    # 2. 入口点加分
+    name = comp.name if hasattr(comp, 'name') else comp_id.split('.')[-1]
+    if name in ('main', '__main__', 'run', 'start', 'execute'):
+        score += 20
+    elif not name.startswith('_'):  # 公开API
+        score += 10
+    
+    # 3. 有docstring加分
+    if hasattr(comp, 'has_docstring') and comp.has_docstring:
+        score += 15
+    elif hasattr(comp, 'docstring') and comp.docstring:
+        score += 15
+    
+    # 4. 代码长度（适中的代码更可能是核心组件）
+    if hasattr(comp, 'source_code'):
+        lines = len(comp.source_code.split('\n'))
+        if 10 <= lines <= 200:
+            score += 10
+        elif 5 <= lines < 10:
+            score += 5
+    
+    # 5. 组件类型加分
+    comp_type = comp.component_type if hasattr(comp, 'component_type') else ''
+    if comp_type in ('class', 'interface'):
+        score += 10
+    elif comp_type in ('struct', 'enum'):
+        score += 5
+    
+    return min(score, 100)
+
+
+def get_leaf_nodes(graph: Dict[str, Set[str]], components: Dict[str, Node]) -> List[str]:
+    """
+    找出叶子节点（没有被其他节点依赖的节点）。
+    
+    使用智能类型选择和重要性排序来优化结果。
+    
+    Args:
+        graph: 依赖图（A→B 表示 A 依赖 B）
+        components: 组件字典
     
     Returns:
-        A list of leaf nodes
+        叶子节点列表，按重要性排序
     """
-    # First, resolve cycles to ensure we have a DAG
+    # 解决循环依赖
     acyclic_graph = resolve_cycles(graph)
     
-    # Find leaf nodes (nodes that no other nodes depend on)
+    # 获取所有节点作为初始叶子节点集
     leaf_nodes = set(acyclic_graph.keys())
-
     
+    # 动态确定有效类型
+    valid_types = determine_valid_types(components)
+    logger.debug(f"Valid component types: {valid_types}")
     
-    def concise_node(leaf_nodes: Set[str]) -> Set[str]:
-        concise_leaf_nodes = set()
-        for node in leaf_nodes:
-            if node.endswith("__init__"):
-                # replace by class name
-                concise_leaf_nodes.add(node.replace(".__init__", ""))
-            else:
-                concise_leaf_nodes.add(node)
+    def filter_and_score_nodes(candidates: Set[str]) -> List[tuple]:
+        """过滤并评分候选节点"""
+        scored_nodes = []
         
-        keep_leaf_nodes = []
-        
-        # Determine if we should include functions based on available component types
-        # For C-based projects, we need to include functions since they don't have classes
-        available_types = set()
-        for comp in components.values():
-            available_types.add(comp.component_type)
-        
-        # Valid types for leaf nodes - include functions for C-based codebases
-        valid_types = {"class", "interface", "struct"}
-        # If no classes/interfaces/structs are found, include functions
-        if not available_types.intersection(valid_types):
-            valid_types.add("function")
-
-        for leaf_node in leaf_nodes:
-            # Skip any leaf nodes that are clearly error strings or invalid identifiers
-            if not isinstance(leaf_node, str) or leaf_node.strip() == "" or any(err_keyword in leaf_node.lower() for err_keyword in ['error', 'exception', 'failed', 'invalid']):
-                logger.debug(f"Skipping invalid leaf node identifier: '{leaf_node}'")
+        for node in candidates:
+            # 处理 __init__ 别名
+            display_node = node
+            if node.endswith(".__init__"):
+                display_node = node.replace(".__init__", "")
+            
+            # 跳过无效标识符
+            if not isinstance(node, str) or not node.strip():
                 continue
-                
-            if leaf_node in components:
-                if components[leaf_node].component_type in valid_types:
-                    keep_leaf_nodes.append(leaf_node)
+            
+            # 跳过错误相关的节点名
+            lower_node = node.lower()
+            if any(err in lower_node for err in ['error', 'exception', 'failed', 'invalid']):
+                # 但保留 Exception 类（它们可能是自定义异常）
+                if 'exception' in lower_node:
+                    comp = components.get(node)
+                    if comp and comp.component_type == 'class':
+                        pass  # 保留自定义异常类
+                    else:
+                        continue
                 else:
-                    # logger.debug(f"Leaf node {leaf_node} is a {components[leaf_node].component_type}, removing it")
-                    pass
-            else:
-                # logger.debug(f"Leaf node {leaf_node} not found in components, removing it")
-                pass
-
-        return keep_leaf_nodes
-
-    concise_leaf_nodes = concise_node(leaf_nodes)
-    if len(concise_leaf_nodes) >= 400:
-        logger.debug(f"Leaf nodes are too many ({len(concise_leaf_nodes)}), removing dependencies of other nodes")
-        # Remove nodes that are dependencies of other nodes
+                    continue
+            
+            # 检查组件是否存在且类型有效
+            if node in components:
+                comp = components[node]
+                if comp.component_type in valid_types:
+                    importance = calculate_component_importance(node, components, acyclic_graph)
+                    scored_nodes.append((display_node, importance))
+            elif display_node in components:
+                # 尝试使用显示名称
+                comp = components[display_node]
+                if comp.component_type in valid_types:
+                    importance = calculate_component_importance(display_node, components, acyclic_graph)
+                    scored_nodes.append((display_node, importance))
+        
+        return scored_nodes
+    
+    # 第一轮：处理所有节点
+    scored_nodes = filter_and_score_nodes(leaf_nodes)
+    
+    # 如果节点太多（>400），进行裁剪
+    if len(scored_nodes) >= 400:
+        logger.info(f"Leaf nodes too many ({len(scored_nodes)}), applying importance-based filtering")
+        
+        # 策略1：移除被其他节点依赖的节点
         for node, deps in acyclic_graph.items():
             for dep in deps:
                 leaf_nodes.discard(dep)
         
-        concise_leaf_nodes = concise_node(leaf_nodes)
+        # 重新过滤评分
+        scored_nodes = filter_and_score_nodes(leaf_nodes)
+        
+        # 如果仍然太多，取重要性最高的节点
+        if len(scored_nodes) >= 400:
+            logger.info(f"Still too many nodes ({len(scored_nodes)}), taking top 400 by importance")
+            scored_nodes.sort(key=lambda x: -x[1])
+            scored_nodes = scored_nodes[:400]
     
-    if not leaf_nodes:
-        logger.warning("No leaf nodes found in the graph")
+    if not scored_nodes:
+        logger.warning("No valid leaf nodes found in the graph")
         return []
     
-    return concise_leaf_nodes 
+    # 按重要性排序，返回节点ID
+    scored_nodes.sort(key=lambda x: -x[1])
+    result = [node for node, _ in scored_nodes]
+    
+    logger.debug(f"Found {len(result)} leaf nodes")
+    return result
